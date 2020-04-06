@@ -5,10 +5,19 @@
 #include "common/common/assert.h"
 #include "common/common/fmt.h"
 #include "common/common/lock_guard.h"
-#include "common/common/stack_array.h"
+
+#include "absl/container/fixed_array.h"
 
 namespace Envoy {
 namespace AccessLog {
+
+AccessLogManagerImpl::~AccessLogManagerImpl() {
+  for (auto& access_log : access_logs_) {
+    ENVOY_LOG(debug, "destroying access logger {}", access_log.first);
+    access_log.second.reset();
+  }
+  ENVOY_LOG(debug, "destroyed access loggers");
+}
 
 void AccessLogManagerImpl::reopen() {
   for (auto& access_log : access_logs_) {
@@ -94,9 +103,7 @@ AccessLogFileImpl::~AccessLogFileImpl() {
 }
 
 void AccessLogFileImpl::doWrite(Buffer::Instance& buffer) {
-  uint64_t num_slices = buffer.getRawSlices(nullptr, 0);
-  STACK_ARRAY(slices, Buffer::RawSlice, num_slices);
-  buffer.getRawSlices(slices.begin(), num_slices);
+  Buffer::RawSliceVector slices = buffer.getRawSlices();
 
   // We must do the actual writes to disk under lock, so that we don't intermix chunks from
   // different AccessLogFileImpl pointing to the same underlying file. This can happen either via

@@ -20,7 +20,6 @@
 #include "common/buffer/buffer_impl.h"
 #include "common/common/assert.h"
 #include "common/common/fmt.h"
-#include "common/common/stack_array.h"
 #include "common/config/api_version.h"
 #include "common/event/dispatcher_impl.h"
 #include "common/event/libevent.h"
@@ -37,6 +36,7 @@
 #include "test/test_common/environment.h"
 #include "test/test_common/network_utility.h"
 
+#include "absl/container/fixed_array.h"
 #include "absl/strings/str_join.h"
 #include "gtest/gtest.h"
 
@@ -94,14 +94,15 @@ void IntegrationStreamDecoder::waitForReset() {
   }
 }
 
-void IntegrationStreamDecoder::decode100ContinueHeaders(Http::HeaderMapPtr&& headers) {
+void IntegrationStreamDecoder::decode100ContinueHeaders(Http::ResponseHeaderMapPtr&& headers) {
   continue_headers_ = std::move(headers);
   if (waiting_for_continue_headers_) {
     dispatcher_.exit();
   }
 }
 
-void IntegrationStreamDecoder::decodeHeaders(Http::HeaderMapPtr&& headers, bool end_stream) {
+void IntegrationStreamDecoder::decodeHeaders(Http::ResponseHeaderMapPtr&& headers,
+                                             bool end_stream) {
   saw_end_stream_ = end_stream;
   headers_ = std::move(headers);
   if ((end_stream && waiting_for_end_stream_) || waiting_for_headers_) {
@@ -123,7 +124,7 @@ void IntegrationStreamDecoder::decodeData(Buffer::Instance& data, bool end_strea
   }
 }
 
-void IntegrationStreamDecoder::decodeTrailers(Http::HeaderMapPtr&& trailers) {
+void IntegrationStreamDecoder::decodeTrailers(Http::ResponseTrailerMapPtr&& trailers) {
   saw_end_stream_ = true;
   trailers_ = std::move(trailers);
   if (waiting_for_end_stream_) {
@@ -208,6 +209,9 @@ void IntegrationTcpClient::waitForDisconnect(bool ignore_spurious_events) {
 }
 
 void IntegrationTcpClient::waitForHalfClose() {
+  if (payload_reader_->readLastByte()) {
+    return;
+  }
   connection_->dispatcher().run(Event::Dispatcher::RunType::Block);
   EXPECT_TRUE(payload_reader_->readLastByte());
 }
@@ -277,10 +281,15 @@ BaseIntegrationTest::BaseIntegrationTest(Network::Address::IpVersion version,
           version, config) {}
 
 Network::ClientConnectionPtr BaseIntegrationTest::makeClientConnection(uint32_t port) {
+  return makeClientConnectionWithOptions(port, nullptr);
+}
+
+Network::ClientConnectionPtr BaseIntegrationTest::makeClientConnectionWithOptions(
+    uint32_t port, const Network::ConnectionSocket::OptionsSharedPtr& options) {
   Network::ClientConnectionPtr connection(dispatcher_->createClientConnection(
       Network::Utility::resolveUrl(
           fmt::format("tcp://{}:{}", Network::Test::getLoopbackAddressUrlString(version_), port)),
-      Network::Address::InstanceConstSharedPtr(), Network::Test::createRawBufferSocket(), nullptr));
+      Network::Address::InstanceConstSharedPtr(), Network::Test::createRawBufferSocket(), options));
 
   connection->enableHalfClose(enable_half_close_);
   return connection;
@@ -406,9 +415,20 @@ void BaseIntegrationTest::setUpstreamAddress(
 }
 
 void BaseIntegrationTest::registerTestServerPorts(const std::vector<std::string>& port_names) {
-  auto port_it = port_names.cbegin();
-  auto listeners = test_server_->server().listenerManager().listeners();
+  bool listeners_ready = false;
+  absl::Mutex l;
+  std::vector<std::reference_wrapper<Network::ListenerConfig>> listeners;
+  test_server_->server().dispatcher().post([this, &listeners, &listeners_ready, &l]() {
+    listeners = test_server_->server().listenerManager().listeners();
+    l.Lock();
+    listeners_ready = true;
+    l.Unlock();
+  });
+  l.LockWhen(absl::Condition(&listeners_ready));
+  l.Unlock();
+
   auto listener_it = listeners.cbegin();
+  auto port_it = port_names.cbegin();
   for (; port_it != port_names.end() && listener_it != listeners.end(); ++port_it, ++listener_it) {
     const auto listen_addr = listener_it->get().listenSocketFactory().localAddress();
     if (listen_addr->type() == Network::Address::Type::Ip) {
@@ -447,7 +467,7 @@ void BaseIntegrationTest::createGeneratedApiTestServer(const std::string& bootst
     const char* success = "listener_manager.listener_create_success";
     const char* rejected = "listener_manager.lds.update_rejected";
     while ((test_server_->counter(success) == nullptr ||
-            test_server_->counter(success)->value() == 0) &&
+            test_server_->counter(success)->value() < concurrency_) &&
            (!allow_lds_rejection || test_server_->counter(rejected) == nullptr ||
             test_server_->counter(rejected)->value() == 0)) {
       if (time_system_.monotonicTime() >= end_time) {
@@ -518,6 +538,24 @@ IntegrationTestServerPtr BaseIntegrationTest::createIntegrationTestServer(
   return IntegrationTestServer::create(bootstrap_path, version_, on_server_ready_function,
                                        on_server_init_function, deterministic_, time_system, *api_,
                                        defer_listener_finalization_);
+}
+
+void BaseIntegrationTest::useListenerAccessLog(absl::string_view format) {
+  listener_access_log_name_ = TestEnvironment::temporaryPath(TestUtility::uniqueFilename());
+  ASSERT_TRUE(config_helper_.setListenerAccessLog(listener_access_log_name_, format));
+}
+
+std::string BaseIntegrationTest::waitForAccessLog(const std::string& filename) {
+  // Wait a max of 1s for logs to flush to disk.
+  for (int i = 0; i < 1000; ++i) {
+    std::string contents = TestEnvironment::readFileToStringForTest(filename, false);
+    if (contents.length() > 0) {
+      return contents;
+    }
+    absl::SleepFor(absl::Milliseconds(1));
+  }
+  RELEASE_ASSERT(0, "Timed out waiting for access log");
+  return "";
 }
 
 void BaseIntegrationTest::createXdsUpstream() {

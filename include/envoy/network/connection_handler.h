@@ -97,9 +97,19 @@ public:
     virtual Listener* listener() PURE;
 
     /**
-     * Destroy the actual Listener it wraps.
+     * Temporarily stop listening according to implementation's own definition.
      */
-    virtual void destroy() PURE;
+    virtual void pauseListening() PURE;
+
+    /**
+     * Resume listening according to implementation's own definition.
+     */
+    virtual void resumeListening() PURE;
+
+    /**
+     * Stop listening according to implementation's own definition.
+     */
+    virtual void shutdownListener() PURE;
   };
 
   using ActiveListenerPtr = std::unique_ptr<ActiveListener>;
@@ -125,7 +135,7 @@ public:
    */
   virtual ConnectionHandler::ActiveListenerPtr
   createActiveUdpListener(ConnectionHandler& parent, Event::Dispatcher& disptacher,
-                          Network::ListenerConfig& config) const PURE;
+                          Network::ListenerConfig& config) PURE;
 
   /**
    * @return true if the UDP passing through listener doesn't form stateful connections.

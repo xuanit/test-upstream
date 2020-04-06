@@ -30,7 +30,7 @@ void RemoteDataFetcher::cancel() {
 }
 
 void RemoteDataFetcher::fetch() {
-  Http::MessagePtr message = Http::Utility::prepareHeaders(uri_);
+  Http::RequestMessagePtr message = Http::Utility::prepareHeaders(uri_);
   message->headers().setReferenceMethod(Http::Headers::get().MethodValues.Get);
   ENVOY_LOG(debug, "fetch remote data from [uri = {}]: start", uri_.uri());
   request_ = cm_.httpAsyncClientForCluster(uri_.cluster())
@@ -39,7 +39,8 @@ void RemoteDataFetcher::fetch() {
                            DurationUtil::durationToMilliseconds(uri_.timeout()))));
 }
 
-void RemoteDataFetcher::onSuccess(Http::MessagePtr&& response) {
+void RemoteDataFetcher::onSuccess(const Http::AsyncClient::Request&,
+                                  Http::ResponseMessagePtr&& response) {
   const uint64_t status_code = Http::Utility::getResponseStatus(response->headers());
   if (status_code == enumToInt(Http::Code::OK)) {
     ENVOY_LOG(debug, "fetch remote data [uri = {}]: success", uri_.uri());
@@ -66,7 +67,8 @@ void RemoteDataFetcher::onSuccess(Http::MessagePtr&& response) {
   request_ = nullptr;
 }
 
-void RemoteDataFetcher::onFailure(Http::AsyncClient::FailureReason reason) {
+void RemoteDataFetcher::onFailure(const Http::AsyncClient::Request&,
+                                  Http::AsyncClient::FailureReason reason) {
   ENVOY_LOG(debug, "fetch remote data [uri = {}]: network error {}", uri_.uri(), enumToInt(reason));
   request_ = nullptr;
   callback_.onFailure(FailureReason::Network);

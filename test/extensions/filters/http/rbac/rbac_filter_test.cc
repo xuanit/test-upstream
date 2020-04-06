@@ -86,7 +86,8 @@ public:
   RoleBasedAccessControlFilter filter_;
   Network::Address::InstanceConstSharedPtr address_;
   std::string requested_server_name_;
-  Http::TestHeaderMapImpl headers_;
+  Http::TestRequestHeaderMapImpl headers_;
+  Http::TestRequestTrailerMapImpl trailers_;
 };
 
 TEST_F(RoleBasedAccessControlFilterTest, Allowed) {
@@ -100,7 +101,7 @@ TEST_F(RoleBasedAccessControlFilterTest, Allowed) {
 
   Buffer::OwnedImpl data("");
   EXPECT_EQ(Http::FilterDataStatus::Continue, filter_.decodeData(data, false));
-  EXPECT_EQ(Http::FilterTrailersStatus::Continue, filter_.decodeTrailers(headers_));
+  EXPECT_EQ(Http::FilterTrailersStatus::Continue, filter_.decodeTrailers(trailers_));
 }
 
 TEST_F(RoleBasedAccessControlFilterTest, RequestedServerName) {
@@ -115,7 +116,19 @@ TEST_F(RoleBasedAccessControlFilterTest, RequestedServerName) {
 
   Buffer::OwnedImpl data("");
   EXPECT_EQ(Http::FilterDataStatus::Continue, filter_.decodeData(data, false));
-  EXPECT_EQ(Http::FilterTrailersStatus::Continue, filter_.decodeTrailers(headers_));
+  EXPECT_EQ(Http::FilterTrailersStatus::Continue, filter_.decodeTrailers(trailers_));
+}
+
+TEST_F(RoleBasedAccessControlFilterTest, Path) {
+  setDestinationPort(999);
+
+  auto headers = Http::TestRequestHeaderMapImpl{
+      {":method", "GET"},
+      {":path", "/suffix#seg?param=value"},
+      {":scheme", "http"},
+      {":authority", "host"},
+  };
+  EXPECT_EQ(Http::FilterHeadersStatus::Continue, filter_.decodeHeaders(headers, false));
 }
 
 TEST_F(RoleBasedAccessControlFilterTest, Path) {
@@ -134,7 +147,7 @@ TEST_F(RoleBasedAccessControlFilterTest, Denied) {
   setDestinationPort(456);
   setMetadata();
 
-  Http::TestHeaderMapImpl response_headers{
+  Http::TestResponseHeaderMapImpl response_headers{
       {":status", "403"},
       {"content-length", "19"},
       {"content-type", "text/plain"},

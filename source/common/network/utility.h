@@ -64,9 +64,9 @@ static const uint64_t MAX_UDP_PACKET_SIZE = 1500;
  */
 class Utility {
 public:
-  static const std::string TCP_SCHEME;
-  static const std::string UDP_SCHEME;
-  static const std::string UNIX_SCHEME;
+  static constexpr absl::string_view TCP_SCHEME{"tcp://"};
+  static constexpr absl::string_view UDP_SCHEME{"udp://"};
+  static constexpr absl::string_view UNIX_SCHEME{"unix://"};
 
   /**
    * Resolve a URL.
@@ -235,7 +235,7 @@ public:
    * @param fd is the descriptor returned by accept()
    * @return the original destination or nullptr if not available.
    */
-  static Address::InstanceConstSharedPtr getOriginalDst(int fd);
+  static Address::InstanceConstSharedPtr getOriginalDst(os_fd_t fd);
 
   /**
    * Parses a string containing a comma-separated list of port numbers and/or

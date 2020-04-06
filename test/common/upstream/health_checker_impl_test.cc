@@ -117,8 +117,8 @@ public:
     Http::MockClientConnection* codec_{};
     Stats::IsolatedStoreImpl stats_store_;
     Network::MockClientConnection* client_connection_{};
-    NiceMock<Http::MockStreamEncoder> request_encoder_;
-    Http::StreamDecoder* stream_response_callbacks_{};
+    NiceMock<Http::MockRequestEncoder> request_encoder_;
+    Http::ResponseDecoder* stream_response_callbacks_{};
   };
 
   using TestSessionPtr = std::unique_ptr<TestSession>;
@@ -613,8 +613,8 @@ public:
                bool body = false, bool trailers = false,
                const absl::optional<std::string>& service_cluster = absl::optional<std::string>(),
                bool degraded = false) {
-    std::unique_ptr<Http::TestHeaderMapImpl> response_headers(
-        new Http::TestHeaderMapImpl{{":status", code}});
+    std::unique_ptr<Http::TestResponseHeaderMapImpl> response_headers(
+        new Http::TestResponseHeaderMapImpl{{":status", code}});
 
     if (degraded) {
       response_headers->setEnvoyDegraded(1);
@@ -640,7 +640,7 @@ public:
 
     if (trailers) {
       test_sessions_[index]->stream_response_callbacks_->decodeTrailers(
-          Http::HeaderMapPtr{new Http::TestHeaderMapImpl{{"some", "trailer"}}});
+          Http::ResponseTrailerMapPtr{new Http::TestResponseTrailerMapImpl{{"some", "trailer"}}});
     }
   }
 
@@ -904,8 +904,8 @@ TEST_F(HttpHealthCheckerImplTest, SuccessWithSpurious100Continue) {
               enableTimer(std::chrono::milliseconds(45000), _));
   EXPECT_CALL(*test_sessions_[0]->timeout_timer_, disableTimer());
 
-  std::unique_ptr<Http::TestHeaderMapImpl> continue_headers(
-      new Http::TestHeaderMapImpl{{":status", "100"}});
+  std::unique_ptr<Http::TestResponseHeaderMapImpl> continue_headers(
+      new Http::TestResponseHeaderMapImpl{{":status", "100"}});
   test_sessions_[0]->stream_response_callbacks_->decode100ContinueHeaders(
       std::move(continue_headers));
 
@@ -1046,7 +1046,7 @@ TEST_F(HttpHealthCheckerImplTest, ZeroRetryInterval) {
   expectStreamCreate(0);
   EXPECT_CALL(*test_sessions_[0]->timeout_timer_, enableTimer(_, _));
   EXPECT_CALL(test_sessions_[0]->request_encoder_, encodeHeaders(_, true))
-      .WillOnce(Invoke([&](const Http::HeaderMap& headers, bool) {
+      .WillOnce(Invoke([&](const Http::RequestHeaderMap& headers, bool) {
         EXPECT_EQ(headers.Host()->value().getStringView(), host);
         EXPECT_EQ(headers.Path()->value().getStringView(), path);
         EXPECT_EQ(headers.Scheme()->value().getStringView(),
@@ -1125,7 +1125,7 @@ TEST_F(HttpHealthCheckerImplTest, SuccessServiceCheck) {
   expectStreamCreate(0);
   EXPECT_CALL(*test_sessions_[0]->timeout_timer_, enableTimer(_, _));
   EXPECT_CALL(test_sessions_[0]->request_encoder_, encodeHeaders(_, true))
-      .WillOnce(Invoke([&](const Http::HeaderMap& headers, bool) {
+      .WillOnce(Invoke([&](const Http::RequestHeaderMap& headers, bool) {
         EXPECT_EQ(headers.Host()->value().getStringView(), host);
         EXPECT_EQ(headers.Path()->value().getStringView(), path);
         EXPECT_EQ(headers.Scheme()->value().getStringView(),
@@ -1160,7 +1160,7 @@ TEST_F(HttpHealthCheckerImplTest, SuccessServicePrefixPatternCheck) {
   expectStreamCreate(0);
   EXPECT_CALL(*test_sessions_[0]->timeout_timer_, enableTimer(_, _));
   EXPECT_CALL(test_sessions_[0]->request_encoder_, encodeHeaders(_, true))
-      .WillOnce(Invoke([&](const Http::HeaderMap& headers, bool) {
+      .WillOnce(Invoke([&](const Http::RequestHeaderMap& headers, bool) {
         EXPECT_EQ(headers.Host()->value().getStringView(), host);
         EXPECT_EQ(headers.Path()->value().getStringView(), path);
         EXPECT_EQ(headers.Scheme()->value().getStringView(),
@@ -1195,7 +1195,7 @@ TEST_F(HttpHealthCheckerImplTest, SuccessServiceExactPatternCheck) {
   expectStreamCreate(0);
   EXPECT_CALL(*test_sessions_[0]->timeout_timer_, enableTimer(_, _));
   EXPECT_CALL(test_sessions_[0]->request_encoder_, encodeHeaders(_, true))
-      .WillOnce(Invoke([&](const Http::HeaderMap& headers, bool) {
+      .WillOnce(Invoke([&](const Http::RequestHeaderMap& headers, bool) {
         EXPECT_EQ(headers.Host()->value().getStringView(), host);
         EXPECT_EQ(headers.Path()->value().getStringView(), path);
         EXPECT_EQ(headers.Scheme()->value().getStringView(),
@@ -1230,7 +1230,7 @@ TEST_F(HttpHealthCheckerImplTest, SuccessServiceRegexPatternCheck) {
   expectStreamCreate(0);
   EXPECT_CALL(*test_sessions_[0]->timeout_timer_, enableTimer(_, _));
   EXPECT_CALL(test_sessions_[0]->request_encoder_, encodeHeaders(_, true))
-      .WillOnce(Invoke([&](const Http::HeaderMap& headers, bool) {
+      .WillOnce(Invoke([&](const Http::RequestHeaderMap& headers, bool) {
         EXPECT_EQ(headers.Host()->value().getStringView(), host);
         EXPECT_EQ(headers.Path()->value().getStringView(), path);
         EXPECT_EQ(headers.Scheme()->value().getStringView(),
@@ -1249,11 +1249,96 @@ TEST_F(HttpHealthCheckerImplTest, SuccessServiceRegexPatternCheck) {
   EXPECT_EQ(Host::Health::Healthy, cluster_->prioritySet().getMockHostSet(0)->hosts_[0]->health());
 }
 
+// This test verifies that when a hostname is set in the endpoint's HealthCheckConfig, it is used in
+// the health check request.
+TEST_F(HttpHealthCheckerImplTest, SuccessServiceCheckWithCustomHostValueOnTheHost) {
+  const std::string host = "www.envoyproxy.io";
+  envoy::config::endpoint::v3::Endpoint::HealthCheckConfig health_check_config;
+  health_check_config.set_hostname(host);
+  auto test_host = std::make_shared<HostImpl>(
+      cluster_->info_, "", Network::Utility::resolveUrl("tcp://127.0.0.1:80"), nullptr, 1,
+      envoy::config::core::v3::Locality(), health_check_config, 0,
+      envoy::config::core::v3::UNKNOWN);
+  const std::string path = "/healthcheck";
+  setupServiceValidationHC();
+  // Requires non-empty `service_name` in config.
+  EXPECT_CALL(runtime_.snapshot_, featureEnabled("health_check.verify_cluster", 100))
+      .WillOnce(Return(true));
+
+  EXPECT_CALL(*this, onHostStatus(_, HealthTransition::Unchanged)).Times(1);
+
+  cluster_->prioritySet().getMockHostSet(0)->hosts_ = {test_host};
+  cluster_->info_->stats().upstream_cx_total_.inc();
+  expectSessionCreate();
+  expectStreamCreate(0);
+  EXPECT_CALL(*test_sessions_[0]->timeout_timer_, enableTimer(_, _));
+  EXPECT_CALL(test_sessions_[0]->request_encoder_, encodeHeaders(_, true))
+      .WillOnce(Invoke([&](const Http::RequestHeaderMap& headers, bool) {
+        EXPECT_EQ(headers.Host()->value().getStringView(), host);
+        EXPECT_EQ(headers.Path()->value().getStringView(), path);
+      }));
+  health_checker_->start();
+
+  EXPECT_CALL(runtime_.snapshot_, getInteger("health_check.max_interval", _));
+  EXPECT_CALL(runtime_.snapshot_, getInteger("health_check.min_interval", _))
+      .WillOnce(Return(45000));
+  EXPECT_CALL(*test_sessions_[0]->interval_timer_,
+              enableTimer(std::chrono::milliseconds(45000), _));
+  EXPECT_CALL(*test_sessions_[0]->timeout_timer_, disableTimer());
+  absl::optional<std::string> health_checked_cluster("locations-production-iad");
+  respond(0, "200", false, false, true, false, health_checked_cluster);
+  EXPECT_EQ(Host::Health::Healthy, cluster_->prioritySet().getMockHostSet(0)->hosts_[0]->health());
+}
+
+// This test verifies that when a hostname is set in the endpoint's HealthCheckConfig and in the
+// cluster level configuration, the one in the endpoint takes priority.
+TEST_F(HttpHealthCheckerImplTest,
+       SuccessServiceCheckWithCustomHostValueOnTheHostThatOverridesConfigValue) {
+  const std::string host = "www.envoyproxy.io";
+  envoy::config::endpoint::v3::Endpoint::HealthCheckConfig health_check_config;
+  health_check_config.set_hostname(host);
+  auto test_host = std::make_shared<HostImpl>(
+      cluster_->info_, "", Network::Utility::resolveUrl("tcp://127.0.0.1:80"), nullptr, 1,
+      envoy::config::core::v3::Locality(), health_check_config, 0,
+      envoy::config::core::v3::UNKNOWN);
+  const std::string path = "/healthcheck";
+  // Setup health check config with a different host, to check that we still get the host configured
+  // on the endpoint.
+  setupServiceValidationWithCustomHostValueHC("foo.com");
+  // Requires non-empty `service_name` in config.
+  EXPECT_CALL(runtime_.snapshot_, featureEnabled("health_check.verify_cluster", 100))
+      .WillOnce(Return(true));
+
+  EXPECT_CALL(*this, onHostStatus(_, HealthTransition::Unchanged)).Times(1);
+
+  cluster_->prioritySet().getMockHostSet(0)->hosts_ = {test_host};
+  cluster_->info_->stats().upstream_cx_total_.inc();
+  expectSessionCreate();
+  expectStreamCreate(0);
+  EXPECT_CALL(*test_sessions_[0]->timeout_timer_, enableTimer(_, _));
+  EXPECT_CALL(test_sessions_[0]->request_encoder_, encodeHeaders(_, true))
+      .WillOnce(Invoke([&](const Http::RequestHeaderMap& headers, bool) {
+        EXPECT_EQ(headers.Host()->value().getStringView(), host);
+        EXPECT_EQ(headers.Path()->value().getStringView(), path);
+      }));
+  health_checker_->start();
+
+  EXPECT_CALL(runtime_.snapshot_, getInteger("health_check.max_interval", _));
+  EXPECT_CALL(runtime_.snapshot_, getInteger("health_check.min_interval", _))
+      .WillOnce(Return(45000));
+  EXPECT_CALL(*test_sessions_[0]->interval_timer_,
+              enableTimer(std::chrono::milliseconds(45000), _));
+  EXPECT_CALL(*test_sessions_[0]->timeout_timer_, disableTimer());
+  absl::optional<std::string> health_checked_cluster("locations-production-iad");
+  respond(0, "200", false, false, true, false, health_checked_cluster);
+  EXPECT_EQ(Host::Health::Healthy, cluster_->prioritySet().getMockHostSet(0)->hosts_[0]->health());
+}
+
 TEST_F(HttpHealthCheckerImplTest, SuccessServiceCheckWithCustomHostValue) {
   const std::string host = "www.envoyproxy.io";
   const std::string path = "/healthcheck";
   setupServiceValidationWithCustomHostValueHC(host);
-  // requires non-empty `service_name` in config.
+  // Requires non-empty `service_name` in config.
   EXPECT_CALL(runtime_.snapshot_, featureEnabled("health_check.verify_cluster", 100))
       .WillOnce(Return(true));
 
@@ -1266,7 +1351,7 @@ TEST_F(HttpHealthCheckerImplTest, SuccessServiceCheckWithCustomHostValue) {
   expectStreamCreate(0);
   EXPECT_CALL(*test_sessions_[0]->timeout_timer_, enableTimer(_, _));
   EXPECT_CALL(test_sessions_[0]->request_encoder_, encodeHeaders(_, true))
-      .WillOnce(Invoke([&](const Http::HeaderMap& headers, bool) {
+      .WillOnce(Invoke([&](const Http::RequestHeaderMap& headers, bool) {
         EXPECT_EQ(headers.Host()->value().getStringView(), host);
         EXPECT_EQ(headers.Path()->value().getStringView(), path);
       }));
@@ -1310,7 +1395,7 @@ TEST_F(HttpHealthCheckerImplTest, SuccessServiceCheckWithAdditionalHeaders) {
   const std::string value_downstream_local_address_without_port = "127.0.0.1";
 
   setupServiceValidationWithAdditionalHeaders();
-  // requires non-empty `service_name` in config.
+  // Requires non-empty `service_name` in config.
   EXPECT_CALL(runtime_.snapshot_, featureEnabled("health_check.verify_cluster", 100))
       .WillOnce(Return(true));
 
@@ -1322,7 +1407,6 @@ TEST_F(HttpHealthCheckerImplTest, SuccessServiceCheckWithAdditionalHeaders) {
             key: value
       )EOF");
 
-  std::string current_start_time;
   cluster_->prioritySet().getMockHostSet(0)->hosts_ = {
       makeTestHost(cluster_->info_, "tcp://127.0.0.1:80", metadata)};
   cluster_->info_->stats().upstream_cx_total_.inc();
@@ -1330,7 +1414,7 @@ TEST_F(HttpHealthCheckerImplTest, SuccessServiceCheckWithAdditionalHeaders) {
   expectStreamCreate(0);
   EXPECT_CALL(*test_sessions_[0]->timeout_timer_, enableTimer(_, _));
   EXPECT_CALL(test_sessions_[0]->request_encoder_, encodeHeaders(_, true))
-      .WillRepeatedly(Invoke([&](const Http::HeaderMap& headers, bool) {
+      .WillRepeatedly(Invoke([&](const Http::RequestHeaderMap& headers, bool) {
         EXPECT_EQ(headers.get(header_ok)->value().getStringView(), value_ok);
         EXPECT_EQ(headers.get(header_cool)->value().getStringView(), value_cool);
         EXPECT_EQ(headers.get(header_awesome)->value().getStringView(), value_awesome);
@@ -1348,8 +1432,10 @@ TEST_F(HttpHealthCheckerImplTest, SuccessServiceCheckWithAdditionalHeaders) {
         EXPECT_EQ(headers.get(downstream_local_address_without_port)->value().getStringView(),
                   value_downstream_local_address_without_port);
 
-        EXPECT_NE(headers.get(start_time)->value().getStringView(), current_start_time);
-        current_start_time = std::string(headers.get(start_time)->value().getStringView());
+        Envoy::DateFormatter date_formatter("%s.%9f");
+        std::string current_start_time =
+            date_formatter.fromTime(dispatcher_.timeSource().systemTime());
+        EXPECT_EQ(headers.get(start_time)->value().getStringView(), current_start_time);
       }));
   health_checker_->start();
 
@@ -1370,7 +1456,7 @@ TEST_F(HttpHealthCheckerImplTest, SuccessServiceCheckWithAdditionalHeaders) {
 
 TEST_F(HttpHealthCheckerImplTest, SuccessServiceCheckWithoutUserAgent) {
   setupServiceValidationWithoutUserAgent();
-  // requires non-empty `service_name` in config.
+  // Requires non-empty `service_name` in config.
   EXPECT_CALL(runtime_.snapshot_, featureEnabled("health_check.verify_cluster", 100))
       .WillOnce(Return(true));
 
@@ -1390,8 +1476,9 @@ TEST_F(HttpHealthCheckerImplTest, SuccessServiceCheckWithoutUserAgent) {
   expectStreamCreate(0);
   EXPECT_CALL(*test_sessions_[0]->timeout_timer_, enableTimer(_, _));
   EXPECT_CALL(test_sessions_[0]->request_encoder_, encodeHeaders(_, true))
-      .WillRepeatedly(Invoke(
-          [&](const Http::HeaderMap& headers, bool) { EXPECT_EQ(headers.UserAgent(), nullptr); }));
+      .WillRepeatedly(Invoke([&](const Http::RequestHeaderMap& headers, bool) {
+        EXPECT_EQ(headers.UserAgent(), nullptr);
+      }));
   health_checker_->start();
 
   EXPECT_CALL(runtime_.snapshot_, getInteger("health_check.max_interval", _));
@@ -1834,8 +1921,8 @@ TEST_F(HttpHealthCheckerImplTest, TimeoutThenSuccess) {
   health_checker_->start();
 
   // Do a response that is not complete but includes headers.
-  std::unique_ptr<Http::TestHeaderMapImpl> response_headers(
-      new Http::TestHeaderMapImpl{{":status", "200"}});
+  std::unique_ptr<Http::TestResponseHeaderMapImpl> response_headers(
+      new Http::TestResponseHeaderMapImpl{{":status", "200"}});
   test_sessions_[0]->stream_response_callbacks_->decodeHeaders(std::move(response_headers), false);
 
   EXPECT_CALL(*this, onHostStatus(_, HealthTransition::ChangePending));
@@ -2323,7 +2410,7 @@ TEST_F(HttpHealthCheckerImplTest, SuccessServiceCheckWithAltPort) {
   expectStreamCreate(0);
   EXPECT_CALL(*test_sessions_[0]->timeout_timer_, enableTimer(_, _));
   EXPECT_CALL(test_sessions_[0]->request_encoder_, encodeHeaders(_, true))
-      .WillOnce(Invoke([&](const Http::HeaderMap& headers, bool) {
+      .WillOnce(Invoke([&](const Http::RequestHeaderMap& headers, bool) {
         EXPECT_EQ(headers.Host()->value().getStringView(), host);
         EXPECT_EQ(headers.Path()->value().getStringView(), path);
       }));
@@ -2519,7 +2606,7 @@ TEST_F(HttpHealthCheckerImplTest, DEPRECATED_FEATURE_TEST(ServiceNameMatch)) {
   expectStreamCreate(0);
   EXPECT_CALL(*test_sessions_[0]->timeout_timer_, enableTimer(_, _));
   EXPECT_CALL(test_sessions_[0]->request_encoder_, encodeHeaders(_, true))
-      .WillOnce(Invoke([&](const Http::HeaderMap& headers, bool) {
+      .WillOnce(Invoke([&](const Http::RequestHeaderMap& headers, bool) {
         EXPECT_EQ(headers.Host()->value().getStringView(), host);
         EXPECT_EQ(headers.Path()->value().getStringView(), path);
         EXPECT_EQ(headers.Scheme()->value().getStringView(),
@@ -3375,8 +3462,8 @@ public:
     Http::MockClientConnection* codec_{};
     Stats::IsolatedStoreImpl stats_store_;
     Network::MockClientConnection* client_connection_{};
-    NiceMock<Http::MockStreamEncoder> request_encoder_;
-    Http::StreamDecoder* stream_response_callbacks_{};
+    NiceMock<Http::MockRequestEncoder> request_encoder_;
+    Http::ResponseDecoder* stream_response_callbacks_{};
     CodecClientForTest* codec_client_{};
   };
 
@@ -3629,7 +3716,7 @@ public:
   void respondResponseSpec(size_t index, ResponseSpec&& spec) {
     const bool trailers_empty = spec.trailers.empty();
     const bool end_stream_on_headers = spec.body_chunks.empty() && trailers_empty;
-    auto response_headers = std::make_unique<Http::TestHeaderMapImpl>();
+    auto response_headers = std::make_unique<Http::TestResponseHeaderMapImpl>();
     for (const auto& header : spec.response_headers) {
       response_headers->addCopy(header.first, header.second);
     }
@@ -3647,7 +3734,7 @@ public:
       }
     }
     if (!trailers_empty) {
-      auto trailers = std::make_unique<Http::TestHeaderMapImpl>();
+      auto trailers = std::make_unique<Http::TestResponseTrailerMapImpl>();
       for (const auto& header : spec.trailers) {
         trailers->addCopy(header.first, header.second);
       }
@@ -3665,13 +3752,18 @@ public:
 
     cluster_->prioritySet().getMockHostSet(0)->hosts_ = {
         makeTestHost(cluster_->info_, "tcp://127.0.0.1:80")};
+    runHealthCheck(expected_host);
+  }
+
+  void runHealthCheck(std::string expected_host) {
+
     cluster_->info_->stats().upstream_cx_total_.inc();
 
     expectSessionCreate();
     expectHealthcheckStart(0);
 
     EXPECT_CALL(test_sessions_[0]->request_encoder_, encodeHeaders(_, false))
-        .WillOnce(Invoke([&](const Http::HeaderMap& headers, bool) {
+        .WillOnce(Invoke([&](const Http::RequestHeaderMap& headers, bool) {
           EXPECT_EQ(Http::Headers::get().ContentTypeValues.Grpc,
                     headers.ContentType()->value().getStringView());
           EXPECT_EQ(std::string("/grpc.health.v1.Health/Check"),
@@ -3727,6 +3819,36 @@ class GrpcHealthCheckerImplTest : public testing::Test, public GrpcHealthChecker
 // Test single host check success.
 TEST_F(GrpcHealthCheckerImplTest, Success) { testSingleHostSuccess(absl::nullopt); }
 
+TEST_F(GrpcHealthCheckerImplTest, SuccessWithHostname) {
+  std::string expected_host = "www.envoyproxy.io";
+
+  setupServiceNameHC(absl::nullopt);
+
+  envoy::config::endpoint::v3::Endpoint::HealthCheckConfig health_check_config;
+  health_check_config.set_hostname(expected_host);
+  auto test_host = std::make_shared<HostImpl>(
+      cluster_->info_, "", Network::Utility::resolveUrl("tcp://127.0.0.1:80"), nullptr, 1,
+      envoy::config::core::v3::Locality(), health_check_config, 0,
+      envoy::config::core::v3::UNKNOWN);
+  cluster_->prioritySet().getMockHostSet(0)->hosts_ = {test_host};
+  runHealthCheck(expected_host);
+}
+
+TEST_F(GrpcHealthCheckerImplTest, SuccessWithHostnameOverridesConfig) {
+  std::string expected_host = "www.envoyproxy.io";
+
+  setupServiceNameHC("foo.com");
+
+  envoy::config::endpoint::v3::Endpoint::HealthCheckConfig health_check_config;
+  health_check_config.set_hostname(expected_host);
+  auto test_host = std::make_shared<HostImpl>(
+      cluster_->info_, "", Network::Utility::resolveUrl("tcp://127.0.0.1:80"), nullptr, 1,
+      envoy::config::core::v3::Locality(), health_check_config, 0,
+      envoy::config::core::v3::UNKNOWN);
+  cluster_->prioritySet().getMockHostSet(0)->hosts_ = {test_host};
+  runHealthCheck(expected_host);
+}
+
 // Test single host check success with custom authority.
 TEST_F(GrpcHealthCheckerImplTest, SuccessWithCustomAuthority) {
   const std::string authority = "www.envoyproxy.io";
@@ -3738,7 +3860,7 @@ TEST_F(GrpcHealthCheckerImplTest, SuccessResponseSplitBetweenChunks) {
   setupServiceNameHC(absl::nullopt);
   expectSingleHealthcheck(HealthTransition::Unchanged);
 
-  auto response_headers = std::make_unique<Http::TestHeaderMapImpl>(
+  auto response_headers = std::make_unique<Http::TestResponseHeaderMapImpl>(
       std::initializer_list<std::pair<std::string, std::string>>{
           {":status", "200"},
           {"content-type", "application/grpc"},
@@ -3757,7 +3879,7 @@ TEST_F(GrpcHealthCheckerImplTest, SuccessResponseSplitBetweenChunks) {
     test_sessions_[0]->stream_response_callbacks_->decodeData(*chunk, false);
   }
 
-  auto trailers = std::make_unique<Http::TestHeaderMapImpl>(
+  auto trailers = std::make_unique<Http::TestResponseTrailerMapImpl>(
       std::initializer_list<std::pair<std::string, std::string>>{{"grpc-status", "0"}});
   test_sessions_[0]->stream_response_callbacks_->decodeTrailers(std::move(trailers));
 

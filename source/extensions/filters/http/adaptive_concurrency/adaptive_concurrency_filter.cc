@@ -10,7 +10,7 @@
 #include "common/common/assert.h"
 #include "common/protobuf/utility.h"
 
-#include "extensions/filters/http/adaptive_concurrency/concurrency_controller/concurrency_controller.h"
+#include "extensions/filters/http/adaptive_concurrency/controller/controller.h"
 #include "extensions/filters/http/well_known_names.h"
 
 namespace Envoy {
@@ -29,7 +29,7 @@ AdaptiveConcurrencyFilter::AdaptiveConcurrencyFilter(
     AdaptiveConcurrencyFilterConfigSharedPtr config, ConcurrencyControllerSharedPtr controller)
     : config_(std::move(config)), controller_(std::move(controller)) {}
 
-Http::FilterHeadersStatus AdaptiveConcurrencyFilter::decodeHeaders(Http::HeaderMap&, bool) {
+Http::FilterHeadersStatus AdaptiveConcurrencyFilter::decodeHeaders(Http::RequestHeaderMap&, bool) {
   // In addition to not sampling if the filter is disabled, health checks should also not be sampled
   // by the concurrency controller since they may potentially bias the sample aggregate to lower
   // latency measurements.
@@ -37,7 +37,7 @@ Http::FilterHeadersStatus AdaptiveConcurrencyFilter::decodeHeaders(Http::HeaderM
     return Http::FilterHeadersStatus::Continue;
   }
 
-  if (controller_->forwardingDecision() == ConcurrencyController::RequestForwardingAction::Block) {
+  if (controller_->forwardingDecision() == Controller::RequestForwardingAction::Block) {
     decoder_callbacks_->sendLocalReply(Http::Code::ServiceUnavailable, "", nullptr, absl::nullopt,
                                        "reached concurrency limit");
     return Http::FilterHeadersStatus::StopIteration;

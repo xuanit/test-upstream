@@ -16,18 +16,8 @@
 namespace Envoy {
 namespace Logger {
 
-#define GENERATE_LOGGER(X) Logger(#X),
-
-const char* Logger::DEFAULT_LOG_FORMAT = "[%Y-%m-%d %T.%e][%t][%l][%n] %v";
-
-Logger::Logger(const std::string& name) {
-  logger_ = std::make_shared<spdlog::logger>(name, Registry::getSink());
-  logger_->set_pattern(DEFAULT_LOG_FORMAT);
-  logger_->set_level(spdlog::level::trace);
-
-  // Ensure that critical errors, especially ASSERT/PANIC, get flushed
-  logger_->flush_on(spdlog::level::critical);
-}
+StandardLogger::StandardLogger(const std::string& name)
+    : Logger(std::make_shared<spdlog::logger>(name, Registry::getSink())) {}
 
 SinkDelegate::SinkDelegate(DelegatingLogSinkSharedPtr log_sink)
     : previous_delegate_(log_sink->delegate()), log_sink_(log_sink) {
@@ -63,7 +53,7 @@ void DelegatingLogSink::log(const spdlog::details::log_msg& msg) {
 
   // This memory buffer must exist in the scope of the entire function,
   // otherwise the string_view will refer to memory that is already free.
-  fmt::memory_buffer formatted;
+  spdlog::memory_buf_t formatted;
   if (formatter_) {
     formatter_->format(msg, formatted);
     msg_view = absl::string_view(formatted.data(), formatted.size());

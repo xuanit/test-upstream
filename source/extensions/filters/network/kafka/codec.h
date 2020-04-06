@@ -1,9 +1,11 @@
 #pragma once
 
+#include <vector>
+
 #include "envoy/buffer/buffer.h"
 #include "envoy/common/pure.h"
 
-#include "common/common/stack_array.h"
+#include "absl/container/fixed_array.h"
 
 namespace Envoy {
 namespace Extensions {
@@ -64,11 +66,8 @@ public:
    * Impl note: similar to redis codec, which also keeps state.
    */
   void onData(Buffer::Instance& data) override {
-    // Convert buffer to slices and pass them to `doParse`.
-    uint64_t num_slices = data.getRawSlices(nullptr, 0);
-    STACK_ARRAY(slices, Buffer::RawSlice, num_slices);
-    data.getRawSlices(slices.begin(), num_slices);
-    for (const Buffer::RawSlice& slice : slices) {
+    // Pass slices to `doParse`.
+    for (const Buffer::RawSlice& slice : data.getRawSlices()) {
       doParse(slice);
     }
   }

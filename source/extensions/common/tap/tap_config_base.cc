@@ -5,10 +5,11 @@
 #include "envoy/data/tap/v3/wrapper.pb.h"
 
 #include "common/common/assert.h"
-#include "common/common/stack_array.h"
 #include "common/protobuf/utility.h"
 
 #include "extensions/common/tap/tap_matcher.h"
+
+#include "absl/container/fixed_array.h"
 
 namespace Envoy {
 namespace Extensions {
@@ -27,9 +28,7 @@ bool Utility::addBufferToProtoBytes(envoy::data::tap::v3::Body& output_body,
   ASSERT(buffer_start_offset + buffer_length_to_copy <= data.length());
   const uint32_t final_bytes_to_copy = std::min(max_buffered_bytes, buffer_length_to_copy);
 
-  const uint64_t num_slices = data.getRawSlices(nullptr, 0);
-  STACK_ARRAY(slices, Buffer::RawSlice, num_slices);
-  data.getRawSlices(slices.begin(), num_slices);
+  Buffer::RawSliceVector slices = data.getRawSlices();
   trimSlices(slices, buffer_start_offset, final_bytes_to_copy);
   for (const Buffer::RawSlice& slice : slices) {
     output_body.mutable_as_bytes()->append(static_cast<const char*>(slice.mem_), slice.len_);

@@ -2,9 +2,10 @@ licenses(["notice"])  # Apache 2
 
 load(
     "//bazel:envoy_build_system.bzl",
+    "envoy_benchmark_test",
+    "envoy_cc_benchmark_binary",
     "envoy_cc_fuzz_test",
     "envoy_cc_test",
-    "envoy_cc_test_binary",
     "envoy_cc_test_library",
     "envoy_package",
     "envoy_select_hot_restart",
@@ -23,6 +24,7 @@ envoy_cc_test(
         ":utility_lib",
         "//source/server:api_listener_lib",
         "//source/server:listener_lib",
+        "//test/mocks/network:network_mocks",
         "//test/mocks/server:server_mocks",
         "//test/test_common:utility_lib",
         "@envoy_api//envoy/config/listener/v3:pkg_cc_proto",
@@ -113,6 +115,7 @@ envoy_cc_test(
     deps = [
         "//source/common/stats:stats_lib",
         "//source/server:hot_restart_lib",
+        "//source/server:hot_restarting_child",
         "//test/mocks/network:network_mocks",
         "//test/mocks/server:server_mocks",
     ],
@@ -141,8 +144,11 @@ envoy_cc_test(
     srcs = ["options_impl_test.cc"],
     deps = [
         "//include/envoy/config:typed_config_interface",
+        "//include/envoy/server:filter_config_interface",
         "//source/common/common:utility_lib",
         "//source/common/stats:stats_lib",
+        "//source/extensions/filters/http:well_known_names",
+        "//source/extensions/filters/http/buffer:config",
         "//source/server:options_lib",
         "//test/mocks/api:api_mocks",
         "//test/test_common:environment_lib",
@@ -151,6 +157,8 @@ envoy_cc_test(
         "//test/test_common:utility_lib",
         "@envoy_api//envoy/admin/v3:pkg_cc_proto",
         "@envoy_api//envoy/config/bootstrap/v3:pkg_cc_proto",
+        "@envoy_api//envoy/config/filter/http/buffer/v2:pkg_cc_proto",
+        "@envoy_api//envoy/extensions/filters/http/buffer/v3:pkg_cc_proto",
     ],
 )
 
@@ -196,8 +204,10 @@ envoy_cc_test_library(
     hdrs = ["listener_manager_impl_test.h"],
     data = ["//test/extensions/transport_sockets/tls/test_data:certs"],
     deps = [
+        "//source/common/init:manager_lib",
         "//source/server:api_listener_lib",
         "//source/server:listener_lib",
+        "//test/mocks/init:init_mocks",
         "//test/mocks/network:network_mocks",
         "//test/mocks/server:server_mocks",
         "//test/test_common:environment_lib",
@@ -387,7 +397,7 @@ envoy_cc_test(
     ],
 )
 
-envoy_cc_test_binary(
+envoy_cc_benchmark_binary(
     name = "filter_chain_benchmark_test",
     srcs = ["filter_chain_benchmark_test.cc"],
     external_deps = [
@@ -403,4 +413,10 @@ envoy_cc_test_binary(
         # tranport socket config registration
         "//source/extensions/transport_sockets/tls:config",
     ],
+)
+
+envoy_benchmark_test(
+    name = "filter_chain_benchmark_test_benchmark_test",
+    timeout = "long",
+    benchmark_binary = "filter_chain_benchmark_test",
 )

@@ -51,11 +51,17 @@ IpTaggingFilterConfig::IpTaggingFilterConfig(
     tag_data.emplace_back(ip_tag.ip_tag_name(), cidr_set);
   }
   trie_ = std::make_unique<Network::LcTrie::LcTrie<std::string>>(tag_data);
+  // TODO(jmarantz): save stat-names for each tag as stat_name_set builtins.
 }
 
 void IpTaggingFilterConfig::incCounter(Stats::StatName name, absl::string_view tag) {
-  Stats::SymbolTable::StoragePtr storage =
-      scope_.symbolTable().join({stats_prefix_, stat_name_set_->getDynamic(tag), name});
+  Stats::SymbolTable::StoragePtr storage;
+  if (tag.empty()) {
+    storage = scope_.symbolTable().join({stats_prefix_, name});
+  } else {
+    Stats::StatNameDynamicStorage tag_storage(tag, scope_.symbolTable());
+    storage = scope_.symbolTable().join({stats_prefix_, tag_storage.statName(), name});
+  }
   scope_.counterFromStatName(Stats::StatName(storage.get())).inc();
 }
 
@@ -65,7 +71,7 @@ IpTaggingFilter::~IpTaggingFilter() = default;
 
 void IpTaggingFilter::onDestroy() {}
 
-Http::FilterHeadersStatus IpTaggingFilter::decodeHeaders(Http::HeaderMap& headers, bool) {
+Http::FilterHeadersStatus IpTaggingFilter::decodeHeaders(Http::RequestHeaderMap& headers, bool) {
   const bool is_internal_request = headers.EnvoyInternalRequest() &&
                                    (headers.EnvoyInternalRequest()->value() ==
                                     Http::Headers::get().EnvoyInternalRequestValues.True.c_str());
@@ -103,7 +109,7 @@ Http::FilterDataStatus IpTaggingFilter::decodeData(Buffer::Instance&, bool) {
   return Http::FilterDataStatus::Continue;
 }
 
-Http::FilterTrailersStatus IpTaggingFilter::decodeTrailers(Http::HeaderMap&) {
+Http::FilterTrailersStatus IpTaggingFilter::decodeTrailers(Http::RequestTrailerMap&) {
   return Http::FilterTrailersStatus::Continue;
 }
 

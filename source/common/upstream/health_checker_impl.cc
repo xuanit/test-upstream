@@ -25,6 +25,33 @@
 namespace Envoy {
 namespace Upstream {
 
+namespace {
+
+// Helper functions to get the correct hostname for an L7 health check.
+const std::string& getHostname(const HostSharedPtr& host, const std::string& config_hostname,
+                               const ClusterInfoConstSharedPtr& cluster) {
+  if (!host->hostnameForHealthChecks().empty()) {
+    return host->hostnameForHealthChecks();
+  }
+
+  if (!config_hostname.empty()) {
+    return config_hostname;
+  }
+
+  return cluster->name();
+}
+
+const std::string& getHostname(const HostSharedPtr& host,
+                               const absl::optional<std::string>& config_hostname,
+                               const ClusterInfoConstSharedPtr& cluster) {
+  if (config_hostname.has_value()) {
+    return getHostname(host, config_hostname.value(), cluster);
+  }
+  return getHostname(host, EMPTY_STRING, cluster);
+}
+
+} // namespace
+
 class HealthCheckerFactoryContextImpl : public Server::Configuration::HealthCheckerFactoryContext {
 public:
   HealthCheckerFactoryContextImpl(Upstream::Cluster& cluster, Envoy::Runtime::Loader& runtime,
@@ -181,8 +208,7 @@ Http::Protocol codecClientTypeToProtocol(Http::CodecClient::Type codec_client_ty
 HttpHealthCheckerImpl::HttpActiveHealthCheckSession::HttpActiveHealthCheckSession(
     HttpHealthCheckerImpl& parent, const HostSharedPtr& host)
     : ActiveHealthCheckSession(parent, host), parent_(parent),
-      hostname_(parent_.host_value_.empty() ? parent_.cluster_.info()->name()
-                                            : parent_.host_value_),
+      hostname_(getHostname(host, parent_.host_value_, parent_.cluster_.info())),
       protocol_(codecClientTypeToProtocol(parent_.codec_client_type_)),
       local_address_(std::make_shared<Network::Address::Ipv4Instance>("127.0.0.1")) {}
 
@@ -199,7 +225,7 @@ void HttpHealthCheckerImpl::HttpActiveHealthCheckSession::onDeferredDelete() {
 }
 
 void HttpHealthCheckerImpl::HttpActiveHealthCheckSession::decodeHeaders(
-    Http::HeaderMapPtr&& headers, bool end_stream) {
+    Http::ResponseHeaderMapPtr&& headers, bool end_stream) {
   ASSERT(!response_headers_);
   response_headers_ = std::move(headers);
   if (end_stream) {
@@ -228,22 +254,22 @@ void HttpHealthCheckerImpl::HttpActiveHealthCheckSession::onInterval() {
     expect_reset_ = false;
   }
 
-  Http::StreamEncoder* request_encoder = &client_->newStream(*this);
+  Http::RequestEncoder* request_encoder = &client_->newStream(*this);
   request_encoder->getStream().addCallbacks(*this);
 
-  Http::HeaderMapImpl request_headers{
-      {Http::Headers::get().Method, "GET"},
-      {Http::Headers::get().Host, hostname_},
-      {Http::Headers::get().Path, parent_.path_},
-      {Http::Headers::get().UserAgent, Http::Headers::get().UserAgentValues.EnvoyHealthChecker}};
+  const auto request_headers = Http::createHeaderMap<Http::RequestHeaderMapImpl>(
+      {{Http::Headers::get().Method, "GET"},
+       {Http::Headers::get().Host, hostname_},
+       {Http::Headers::get().Path, parent_.path_},
+       {Http::Headers::get().UserAgent, Http::Headers::get().UserAgentValues.EnvoyHealthChecker}});
   Router::FilterUtility::setUpstreamScheme(
-      request_headers, host_->transportSocketFactory().implementsSecureTransport());
+      *request_headers, host_->transportSocketFactory().implementsSecureTransport());
   StreamInfo::StreamInfoImpl stream_info(protocol_, parent_.dispatcher_.timeSource());
   stream_info.setDownstreamLocalAddress(local_address_);
   stream_info.setDownstreamRemoteAddress(local_address_);
   stream_info.onUpstreamHostSelected(host_);
-  parent_.request_headers_parser_->evaluateHeaders(request_headers, stream_info);
-  request_encoder->encodeHeaders(request_headers, true);
+  parent_.request_headers_parser_->evaluateHeaders(*request_headers, stream_info);
+  request_encoder->encodeHeaders(*request_headers, true);
 }
 
 void HttpHealthCheckerImpl::HttpActiveHealthCheckSession::onResetStream(Http::StreamResetReason,
@@ -539,7 +565,7 @@ void GrpcHealthCheckerImpl::GrpcActiveHealthCheckSession::onDeferredDelete() {
 }
 
 void GrpcHealthCheckerImpl::GrpcActiveHealthCheckSession::decodeHeaders(
-    Http::HeaderMapPtr&& headers, bool end_stream) {
+    Http::ResponseHeaderMapPtr&& headers, bool end_stream) {
   const auto http_response_status = Http::Utility::getResponseStatus(*headers);
   if (http_response_status != enumToInt(Http::Code::OK)) {
     // https://github.com/grpc/grpc/blob/master/doc/http-grpc-status-mapping.md requires that
@@ -607,7 +633,7 @@ void GrpcHealthCheckerImpl::GrpcActiveHealthCheckSession::decodeData(Buffer::Ins
 }
 
 void GrpcHealthCheckerImpl::GrpcActiveHealthCheckSession::decodeTrailers(
-    Http::HeaderMapPtr&& trailers) {
+    Http::ResponseTrailerMapPtr&& trailers) {
   auto maybe_grpc_status = Grpc::Common::getGrpcStatus(*trailers);
   auto grpc_status =
       maybe_grpc_status
@@ -640,9 +666,8 @@ void GrpcHealthCheckerImpl::GrpcActiveHealthCheckSession::onInterval() {
   request_encoder_ = &client_->newStream(*this);
   request_encoder_->getStream().addCallbacks(*this);
 
-  const std::string& authority = parent_.authority_value_.has_value()
-                                     ? parent_.authority_value_.value()
-                                     : parent_.cluster_.info()->name();
+  const std::string& authority =
+      getHostname(host_, parent_.authority_value_, parent_.cluster_.info());
   auto headers_message =
       Grpc::Common::prepareHeaders(authority, parent_.service_method_.service()->full_name(),
                                    parent_.service_method_.name(), absl::nullopt);

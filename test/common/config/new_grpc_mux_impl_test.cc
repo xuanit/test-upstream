@@ -10,8 +10,8 @@
 #include "common/config/utility.h"
 #include "common/config/version_converter.h"
 #include "common/protobuf/protobuf.h"
-#include "common/stats/isolated_store_impl.h"
 
+#include "test/common/stats/stat_test_utility.h"
 #include "test/mocks/common.h"
 #include "test/mocks/config/mocks.h"
 #include "test/mocks/event/mocks.h"
@@ -58,10 +58,9 @@ public:
   Grpc::MockAsyncClient* async_client_;
   NiceMock<Grpc::MockAsyncStream> async_stream_;
   std::unique_ptr<NewGrpcMuxImpl> grpc_mux_;
-  NiceMock<Config::MockSubscriptionCallbacks<envoy::config::endpoint::v3::ClusterLoadAssignment>>
-      callbacks_;
+  NiceMock<Config::MockSubscriptionCallbacks> callbacks_;
   NiceMock<LocalInfo::MockLocalInfo> local_info_;
-  Stats::IsolatedStoreImpl stats_;
+  Stats::TestUtil::TestStore stats_;
   Envoy::Config::RateLimitSettings rate_limit_settings_;
   Stats::Gauge& control_plane_connected_state_;
 };
@@ -71,18 +70,12 @@ public:
   Event::SimulatedTimeSystem time_system_;
 };
 
-// TODO(fredlas) #8478 will delete this.
-TEST_F(NewGrpcMuxImplTest, JustForCoverageTodoDelete) {
-  setup();
-  EXPECT_TRUE(grpc_mux_->isDelta());
-}
-
 // Test that we simply ignore a message for an unknown type_url, with no ill effects.
 TEST_F(NewGrpcMuxImplTest, DiscoveryResponseNonexistentSub) {
   setup();
 
   const std::string& type_url = Config::TypeUrl::get().ClusterLoadAssignment;
-  grpc_mux_->addOrUpdateWatch(type_url, nullptr, {}, callbacks_, std::chrono::milliseconds(0));
+  auto watch = grpc_mux_->addWatch(type_url, {}, callbacks_);
 
   EXPECT_CALL(*async_client_, startRaw(_, _, _, _)).WillOnce(Return(&async_stream_));
   grpc_mux_->start();
@@ -124,8 +117,7 @@ TEST_F(NewGrpcMuxImplTest, ConfigUpdateWithAliases) {
   setup();
 
   const std::string& type_url = Config::TypeUrl::get().VirtualHost;
-  auto* watch = grpc_mux_->addOrUpdateWatch(type_url, nullptr, {"domain1.test"}, callbacks_,
-                                            std::chrono::milliseconds(0));
+  auto watch = grpc_mux_->addWatch(type_url, {"domain1.test"}, callbacks_);
 
   EXPECT_CALL(*async_client_, startRaw(_, _, _, _)).WillOnce(Return(&async_stream_));
   grpc_mux_->start();
@@ -150,8 +142,7 @@ TEST_F(NewGrpcMuxImplTest, ConfigUpdateWithAliases) {
   auto sub = subscriptions.find(type_url);
 
   EXPECT_TRUE(sub != subscriptions.end());
-  const auto found_resource_names = sub->second->watch_map_.updateWatchInterest(watch, {});
-  EXPECT_TRUE(found_resource_names.removed_.find("vhost_1") != found_resource_names.removed_.end());
+  watch->update({});
 }
 
 // DeltaDiscoveryResponse that comes in response to an on-demand request that couldn't be resolved
@@ -161,8 +152,7 @@ TEST_F(NewGrpcMuxImplTest, ConfigUpdateWithNotFoundResponse) {
   setup();
 
   const std::string& type_url = Config::TypeUrl::get().VirtualHost;
-  auto* watch = grpc_mux_->addOrUpdateWatch(type_url, nullptr, {"domain1.test"}, callbacks_,
-                                            std::chrono::milliseconds(0));
+  auto watch = grpc_mux_->addWatch(type_url, {"domain1.test"}, callbacks_);
 
   EXPECT_CALL(*async_client_, startRaw(_, _, _, _)).WillOnce(Return(&async_stream_));
   grpc_mux_->start();
@@ -181,9 +171,7 @@ TEST_F(NewGrpcMuxImplTest, ConfigUpdateWithNotFoundResponse) {
   auto sub = subscriptions.find(type_url);
 
   EXPECT_TRUE(sub != subscriptions.end());
-  const auto found_resource_names = sub->second->watch_map_.updateWatchInterest(watch, {});
-  EXPECT_TRUE(found_resource_names.removed_.find("not-found") !=
-              found_resource_names.removed_.end());
+  watch->update({});
 }
 
 } // namespace

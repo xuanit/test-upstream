@@ -175,6 +175,11 @@ public:
   }
 
   /**
+   * @return true if content in this Slice can be coalesced into another Slice.
+   */
+  virtual bool canCoalesce() const { return true; }
+
+  /**
    * Describe the in-memory representation of the slice. For use
    * in tests that want to make assertions about the specific arrangement of
    * bytes in a slice.
@@ -187,11 +192,6 @@ public:
   SliceRepresentation describeSliceForTest() const {
     return SliceRepresentation{dataSize(), reservableSize(), capacity_};
   }
-
-  /**
-   * @return true if content in this Slice can be coalesced into another Slice.
-   */
-  virtual bool canCoalesce() const { return true; }
 
 protected:
   Slice(uint64_t data, uint64_t reservable, uint64_t capacity)
@@ -519,7 +519,7 @@ public:
   void commit(RawSlice* iovecs, uint64_t num_iovecs) override;
   void copyOut(size_t start, uint64_t size, void* data) const override;
   void drain(uint64_t size) override;
-  uint64_t getRawSlices(RawSlice* out, uint64_t out_size) const override;
+  RawSliceVector getRawSlices(absl::optional<uint64_t> max_slices = absl::nullopt) const override;
   uint64_t length() const override;
   void* linearize(uint32_t size) override;
   void move(Instance& rhs) override;

@@ -48,10 +48,10 @@ public:
   // ExtAuthz::Client
   void cancel() override;
   void check(RequestCallbacks& callbacks, const envoy::service::auth::v3::CheckRequest& request,
-             Tracing::Span& parent_span) override;
+             Tracing::Span& parent_span, const StreamInfo::StreamInfo& stream_info) override;
 
   // Grpc::AsyncRequestCallbacks
-  void onCreateInitialMetadata(Http::HeaderMap&) override {}
+  void onCreateInitialMetadata(Http::RequestHeaderMap&) override {}
   void onSuccess(std::unique_ptr<envoy::service::auth::v3::CheckResponse>&& response,
                  Tracing::Span& span) override;
   void onFailure(Grpc::Status::GrpcStatus status, const std::string& message,

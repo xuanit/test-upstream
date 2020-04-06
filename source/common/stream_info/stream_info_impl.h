@@ -6,6 +6,7 @@
 #include "envoy/common/time.h"
 #include "envoy/config/core/v3/base.pb.h"
 #include "envoy/http/header_map.h"
+#include "envoy/http/request_id_extension.h"
 #include "envoy/stream_info/stream_info.h"
 
 #include "common/common/assert.h"
@@ -216,8 +217,15 @@ struct StreamInfoImpl : public StreamInfo {
     (*metadata_.mutable_filter_metadata())[name].MergeFrom(value);
   };
 
-  FilterState& filterState() override { return *filter_state_; }
+  const FilterStateSharedPtr& filterState() override { return filter_state_; }
   const FilterState& filterState() const override { return *filter_state_; }
+
+  const FilterStateSharedPtr& upstreamFilterState() const override {
+    return upstream_filter_state_;
+  }
+  void setUpstreamFilterState(const FilterStateSharedPtr& filter_state) override {
+    upstream_filter_state_ = filter_state;
+  }
 
   void setRequestedServerName(absl::string_view requested_server_name) override {
     requested_server_name_ = std::string(requested_server_name);
@@ -233,15 +241,33 @@ struct StreamInfoImpl : public StreamInfo {
     return upstream_transport_failure_reason_;
   }
 
-  void setRequestHeaders(const Http::HeaderMap& headers) override { request_headers_ = &headers; }
+  void setRequestHeaders(const Http::RequestHeaderMap& headers) override {
+    request_headers_ = &headers;
+  }
 
-  const Http::HeaderMap* getRequestHeaders() const override { return request_headers_; }
+  const Http::RequestHeaderMap* getRequestHeaders() const override { return request_headers_; }
+
+  void setRequestIDExtension(Http::RequestIDExtensionSharedPtr utils) override {
+    request_id_extension_ = utils;
+  }
+  Http::RequestIDExtensionSharedPtr getRequestIDExtension() const override {
+    return request_id_extension_;
+  }
 
   void dumpState(std::ostream& os, int indent_level = 0) const {
     const char* spaces = spacesForLevel(indent_level);
     os << spaces << "StreamInfoImpl " << this << DUMP_OPTIONAL_MEMBER(protocol_)
        << DUMP_OPTIONAL_MEMBER(response_code_) << DUMP_OPTIONAL_MEMBER(response_code_details_)
        << DUMP_MEMBER(health_check_request_) << DUMP_MEMBER(route_name_) << "\n";
+  }
+
+  void setUpstreamClusterInfo(
+      const Upstream::ClusterInfoConstSharedPtr& upstream_cluster_info) override {
+    upstream_cluster_info_ = upstream_cluster_info;
+  }
+
+  absl::optional<Upstream::ClusterInfoConstSharedPtr> upstreamClusterInfo() const override {
+    return upstream_cluster_info_;
   }
 
   TimeSource& time_source_;
@@ -261,7 +287,8 @@ struct StreamInfoImpl : public StreamInfo {
   bool health_check_request_{};
   const Router::RouteEntry* route_entry_{};
   envoy::config::core::v3::Metadata metadata_{};
-  std::shared_ptr<FilterStateImpl> filter_state_;
+  FilterStateSharedPtr filter_state_;
+  FilterStateSharedPtr upstream_filter_state_;
   std::string route_name_;
 
 private:
@@ -274,9 +301,11 @@ private:
   Ssl::ConnectionInfoConstSharedPtr downstream_ssl_info_;
   Ssl::ConnectionInfoConstSharedPtr upstream_ssl_info_;
   std::string requested_server_name_;
-  const Http::HeaderMap* request_headers_{};
+  const Http::RequestHeaderMap* request_headers_{};
+  Http::RequestIDExtensionSharedPtr request_id_extension_;
   UpstreamTiming upstream_timing_;
   std::string upstream_transport_failure_reason_;
+  absl::optional<Upstream::ClusterInfoConstSharedPtr> upstream_cluster_info_;
 };
 
 } // namespace StreamInfo

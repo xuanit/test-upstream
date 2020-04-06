@@ -43,8 +43,8 @@ envoy_cc_library(
     srcs = ["base64.cc"],
     hdrs = ["base64.h"],
     deps = [
+        ":assert_lib",
         ":empty_string",
-        ":stack_array",
         "//include/envoy/buffer:buffer_interface",
     ],
 )
@@ -133,10 +133,41 @@ envoy_cc_library(
     hdrs = ["logger.h"],
     external_deps = ["abseil_synchronization"],
     deps = [
+        ":base_logger_lib",
         ":lock_guard_lib",
         ":macros",
         ":non_copyable",
-    ],
+    ] + select({
+        "//bazel:android_logger": ["logger_impl_lib_android"],
+        "//conditions:default": ["logger_impl_lib_standard"],
+    }),
+)
+
+envoy_cc_library(
+    name = "base_logger_lib",
+    srcs = ["base_logger.cc"],
+    hdrs = ["base_logger.h"],
+)
+
+envoy_cc_library(
+    name = "logger_impl_lib_standard",
+    hdrs = ["standard/logger_impl.h"],
+    strip_include_prefix = "standard",
+    deps = [":base_logger_lib"],
+)
+
+envoy_cc_library(
+    name = "logger_impl_lib_android",
+    srcs = select({
+        "//bazel:android_logger": ["android/logger_impl.cc"],
+        "//conditions:default": [],
+    }),
+    hdrs = select({
+        "//bazel:android_logger": ["android/logger_impl.h"],
+        "//conditions:default": [],
+    }),
+    strip_include_prefix = "android",
+    deps = [":base_logger_lib"],
 )
 
 envoy_cc_library(
@@ -221,14 +252,6 @@ envoy_cc_library(
 envoy_cc_library(
     name = "stl_helpers",
     hdrs = ["stl_helpers.h"],
-)
-
-envoy_cc_library(
-    name = "stack_array",
-    hdrs = ["stack_array.h"],
-    deps = [
-        ":assert_lib",
-    ],
 )
 
 envoy_cc_library(
@@ -361,12 +384,6 @@ envoy_cc_library(
 )
 
 envoy_cc_library(
-    name = "to_lower_table_lib",
-    srcs = ["to_lower_table.cc"],
-    hdrs = ["to_lower_table.h"],
-)
-
-envoy_cc_library(
     name = "callback_impl_lib",
     hdrs = ["callback_impl.h"],
     deps = [
@@ -400,5 +417,15 @@ envoy_cc_library(
         "//include/envoy/common:time_interface",
         "//include/envoy/common:token_bucket_interface",
         "//source/common/common:utility_lib",
+    ],
+)
+
+envoy_cc_library(
+    name = "zlib_base_lib",
+    srcs = ["zlib/base.cc"],
+    hdrs = ["zlib/base.h"],
+    external_deps = ["zlib"],
+    deps = [
+        "//source/common/buffer:buffer_lib",
     ],
 )

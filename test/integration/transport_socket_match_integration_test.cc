@@ -20,7 +20,7 @@ public:
   TransportSockeMatchIntegrationTest()
       : HttpIntegrationTest(Http::CodecClient::Type::HTTP1,
                             TestEnvironment::getIpVersionsForTest().front(),
-                            ConfigHelper::HTTP_PROXY_CONFIG),
+                            ConfigHelper::httpProxyConfig()),
         num_hosts_{2} {
     autonomous_upstream_ = true;
     setUpstreamCount(num_hosts_);
@@ -38,7 +38,7 @@ name: "tls_socket"
 match:
   mtlsReady: "true"
 transport_socket:
-  name: envoy.transport_sockets.tls
+  name: tls
   typed_config:
     "@type": type.googleapis.com/envoy.api.v2.auth.UpstreamTlsContext
     common_tls_context:
@@ -164,16 +164,16 @@ require_client_certificate: true
   }
 
   const uint32_t num_hosts_;
-  Http::TestHeaderMapImpl type_a_request_headers_{{":method", "GET"},
-                                                  {":path", "/test"},
-                                                  {":scheme", "http"},
-                                                  {":authority", "host"},
-                                                  {"x-type", "a"}};
-  Http::TestHeaderMapImpl type_b_request_headers_{{":method", "GET"},
-                                                  {":path", "/test"},
-                                                  {":scheme", "http"},
-                                                  {":authority", "host"},
-                                                  {"x-type", "b"}};
+  Http::TestRequestHeaderMapImpl type_a_request_headers_{{":method", "GET"},
+                                                         {":path", "/test"},
+                                                         {":scheme", "http"},
+                                                         {":authority", "host"},
+                                                         {"x-type", "a"}};
+  Http::TestRequestHeaderMapImpl type_b_request_headers_{{":method", "GET"},
+                                                         {":path", "/test"},
+                                                         {":scheme", "http"},
+                                                         {":authority", "host"},
+                                                         {"x-type", "b"}};
   const std::string host_type_header_{"x-host-type"};
   const std::string host_header_{"x-host"};
   const std::string type_header_{"x-type"};
